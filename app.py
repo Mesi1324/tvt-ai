@@ -1,7 +1,8 @@
 import streamlit as st
 from pypdf import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+# SWITCHED TO LOCAL EMBEDDINGS (UNLIMITED)
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.chains.question_answering import load_qa_chain
@@ -19,13 +20,12 @@ st.set_page_config(
 )
 
 # --- 2. SESSION STATE MANAGEMENT ---
-# We use this to remember files across reruns so we don't lose data
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "processed_files" not in st.session_state:
-    st.session_state.processed_files = [] # Track names of indexed files
+    st.session_state.processed_files = []
 if "vector_db" not in st.session_state:
-    st.session_state.vector_db = None # Store the FAISS DB in RAM
+    st.session_state.vector_db = None
 
 # --- 3. SIDEBAR ---
 with st.sidebar:
@@ -41,8 +41,7 @@ with st.sidebar:
 
     st.divider()
     
-    # --- UPGRADE: Active Knowledge Dashboard ---
-    # Shows the user what the AI currently knows
+    # Dashboard
     if st.session_state.processed_files:
         with st.expander(f"📚 Active Knowledge ({len(st.session_state.processed_files)} Files)", expanded=False):
             for f in st.session_state.processed_files:
@@ -59,21 +58,20 @@ with st.sidebar:
         if not pdf_docs:
             st.warning("Please select files first.")
         else:
-            with st.spinner("Processing & Merging..."):
-                # Trigger the processing logic
+            with st.spinner("Processing locally (Unlimited Quota)..."):
                 st.session_state.trigger_process = True
     
     # Reset
-    if st.button("🗑️ Reset Brain (Clear All)", use_container_width=True):
+    if st.button("🗑️ Reset Brain", use_container_width=True):
         st.session_state.messages = []
         st.session_state.processed_files = []
         st.session_state.vector_db = None
         if os.path.exists("faiss_index"):
             import shutil
-            shutil.rmtree("faiss_index") # Delete local file
+            shutil.rmtree("faiss_index")
         st.rerun()
 
-    # Download Chat
+    # Download
     if st.session_state.messages:
         chat_str = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages])
         st.download_button("💾 Download Chat", chat_str, "TVT_History.txt")
@@ -84,7 +82,6 @@ def get_pdf_text_with_metadata(pdf_docs):
     documents = []
     file_names = []
     for pdf in pdf_docs:
-        # Avoid re-processing files we already have (Simple check)
         if pdf.name not in st.session_state.processed_files:
             pdf_reader = PdfReader(pdf)
             file_names.append(pdf.name)
@@ -99,33 +96,29 @@ def get_pdf_text_with_metadata(pdf_docs):
     return documents, file_names
 
 def update_vector_store(documents):
-    """
-    UPGRADE: Merges new documents into existing DB instead of overwriting.
-    """
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=200)
+    # Split text
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=200)
     chunks = text_splitter.split_documents(documents)
     
-    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=api_key)
+    # USE LOCAL EMBEDDINGS (HuggingFace) - No Rate Limits!
+    # Using a multilingual model to support Amharic/English
+    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
     
-    # If DB exists, add to it. If not, create new.
     if st.session_state.vector_db is not None:
         new_db = FAISS.from_documents(chunks, embedding=embeddings)
         st.session_state.vector_db.merge_from(new_db)
     else:
         st.session_state.vector_db = FAISS.from_documents(chunks, embedding=embeddings)
     
-    # Save to local disk for redundancy
     st.session_state.vector_db.save_local("faiss_index")
 
 def get_ai_response(user_question):
-    # Use the session_state DB for speed
     if st.session_state.vector_db is None:
         return "System Error: Database lost. Please reset.", []
 
-    # UPGRADE: Search k=8 chunks for deeper analysis
-    docs = st.session_state.vector_db.similarity_search(user_question, k=8)
+    # UPGRADE: Search k=6 for context
+    docs = st.session_state.vector_db.similarity_search(user_question, k=6)
     
-    # UPGRADE: Robust Prompt
     prompt_template = """
     You are the Official AI Assistant for the FDRE TVT Institute.
     
@@ -150,7 +143,6 @@ def get_ai_response(user_question):
     
     response = chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
     
-    # Source deduplication
     sources = []
     seen = set()
     for doc in docs:
@@ -163,37 +155,26 @@ def get_ai_response(user_question):
 
 # --- 5. LOGIC HANDLER ---
 
-# Check if processing was triggered
 if getattr(st.session_state, 'trigger_process', False):
     if not api_key:
         st.error("❌ API Key Missing")
     else:
         try:
-            # 1. Extract Text
             raw_docs, new_names = get_pdf_text_with_metadata(pdf_docs)
-            
             if not raw_docs:
-                st.warning("No new files to process (Duplicate or Empty).")
+                st.warning("No new files to process.")
             else:
-                # 2. Update Vector DB (Merge)
                 update_vector_store(raw_docs)
-                
-                # 3. Update File List
                 st.session_state.processed_files.extend(new_names)
                 st.toast(f"Added {len(new_names)} new documents!", icon="📚")
-                
         except Exception as e:
             st.error(f"Error: {e}")
-    
-    # Reset trigger
     st.session_state.trigger_process = False
-
 
 # --- 6. MAIN CHAT UI ---
 
 st.title("🇪🇹 FDRE TVT Institute - Smart Assistant")
 
-# Chat Container
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
@@ -202,25 +183,20 @@ for message in st.session_state.messages:
                 for source in message["sources"]:
                     st.caption(f"📄 {source}")
 
-# Input
 if prompt := st.chat_input("Ask about Curriculum, OS, or Manuals..."):
-    # User message
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Check DB
     if st.session_state.vector_db is None:
         with st.chat_message("assistant"):
             st.error("🧠 The Knowledge Base is empty. Please upload documents in the Sidebar.")
     else:
-        # AI Response
         with st.chat_message("assistant"):
             with st.spinner("Analyzing..."):
                 try:
                     full_response, sources = get_ai_response(prompt)
                     
-                    # Stream output
                     placeholder = st.empty()
                     displayed_response = ""
                     for chunk in full_response.split():
@@ -229,18 +205,15 @@ if prompt := st.chat_input("Ask about Curriculum, OS, or Manuals..."):
                         placeholder.markdown(displayed_response + "▌")
                     placeholder.markdown(displayed_response)
 
-                    # Show sources
                     if sources:
                         with st.expander("🔍 Verified Sources / ምንጮች"):
                             for source in sources:
                                 st.caption(f"📄 {source}")
 
-                    # Save to history
                     st.session_state.messages.append({
                         "role": "assistant", 
                         "content": full_response,
                         "sources": sources
                     })
-
                 except Exception as e:
                     st.error(f"Error: {e}")
