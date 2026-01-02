@@ -1,7 +1,7 @@
 import streamlit as st
 from pypdf import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-# SWITCHED TO LOCAL EMBEDDINGS (UNLIMITED)
+# LOCAL EMBEDDINGS (No Rate Limits)
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -101,7 +101,6 @@ def update_vector_store(documents):
     chunks = text_splitter.split_documents(documents)
     
     # USE LOCAL EMBEDDINGS (HuggingFace) - No Rate Limits!
-    # Using a multilingual model to support Amharic/English
     embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
     
     if st.session_state.vector_db is not None:
@@ -116,17 +115,18 @@ def get_ai_response(user_question):
     if st.session_state.vector_db is None:
         return "System Error: Database lost. Please reset.", []
 
-    # UPGRADE: Search k=6 for context
-    docs = st.session_state.vector_db.similarity_search(user_question, k=6)
+    # Search k=5 for context
+    docs = st.session_state.vector_db.similarity_search(user_question, k=5)
     
+    # PROMPT UPDATED FOR GEMINI-PRO
     prompt_template = """
     You are the Official AI Assistant for the FDRE TVT Institute.
+    Answer the question based ONLY on the provided Context below.
     
     INSTRUCTIONS:
-    1. Language Rule: If the user asks in Amharic, YOU MUST ANSWER IN AMHARIC. If English, use English.
-    2. Context Rule: Answer ONLY based on the provided documents.
-    3. Formatting: Use clear headers and bullet points.
-    4. Honesty: If the answer is not in the context, say "Information not found in the documents."
+    1. If the user asks in Amharic, YOU MUST ANSWER IN AMHARIC. If English, use English.
+    2. Format your answer with bullet points if listing requirements.
+    3. If the answer is not in the context, say "Information not found in the documents."
     
     Context:
     {context}
@@ -137,7 +137,9 @@ def get_ai_response(user_question):
     Answer:
     """
     
-    model = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=api_key, temperature=0.3)
+    # --- FIX: Changed model to 'gemini-pro' which is stable ---
+    model = ChatGoogleGenerativeAI(model="gemini-pro", google_api_key=api_key, temperature=0.3)
+    
     prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
     chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
     
