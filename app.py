@@ -1,9 +1,9 @@
 import streamlit as st
 from pypdf import PdfReader
-# --- UPDATED IMPORT BELOW (Fixes the ModuleNotFoundError) ---
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+# We are using the stable import now that we pinned the version
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.chains.question_answering import load_qa_chain
 from langchain.prompts import PromptTemplate
@@ -61,12 +61,12 @@ def get_pdf_text(pdf_docs):
     return text
 
 def get_text_chunks(text):
-    # This now uses the updated import
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=5000, chunk_overlap=500)
     chunks = text_splitter.split_text(text)
     return chunks
 
 def get_vector_store(text_chunks):
+    # Using the community import which is stable in 0.1.20
     embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
     vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
     vector_store.save_local("faiss_index")
